@@ -51,63 +51,53 @@ app.get('/api/users/', async (req, res) => {
 app.get('/api/users/:_id/logs', async (req, res) => {
   const userId = req.params._id
   const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-  const from = dateRegex.test(req.query.from) ? new Date(req.query.from).toDateString() : ''
-  const to = dateRegex.test(req.query.to) ? new Date(req.query.to) : ''
-  const limit = req.query.limit
+  const from = req.query.from !== undefined && dateRegex.test(req.query.from) ? new Date(req.query.from).toDateString() : ''
+  const to = req.query.to !== undefined && dateRegex.test(req.query.to) ? new Date(req.query.to).toDateString() : ''
+  const limit = !isNaN(req.query.limit) ? parseInt(req.query.limit) : 0
+  console.log(from, to, limit)
   try {
     let findUser = await User.findById(userId)
+    let findConditions = {}
     if (findUser) {
-      let findUserExercise = await Exercise.find({ userId })
-      if (findUserExercise) {
-        let filteredLogs = []
-        let limitedCount
-        if (from !== undefined || to !== undefined || !isNaN(limit)) {
-          findUserExercise.forEach(exe => {
-            let logDate = new Date(exe.date)
-            if (from instanceof (Date) && to instanceof (Date)) {
-              if (logDate >= from && logDate <= to) {
-                filteredLogs.push({
-                  description: exe.description,
-                  duration: exe.duration,
-                  date: new Date(exe.date).toDateString()
-                })
-              }
-            } else if (from instanceof (Date)) {
-              if (logDate >= from) {
-                filteredLogs.push({
-                  description: exe.description,
-                  duration: exe.duration,
-                  date: new Date(exe.date).toDateString()
-                })
-              }
-            } else if (to instanceof (Date)) {
-              if (logDate <= to) {
-                filteredLogs.push({
-                  description: exe.description,
-                  duration: exe.duration,
-                  date: new Date(exe.date).toDateString()
-                })
-              }
-            }
+      if (from === '' && to === '') {
+        console.log('Neither')
+        findConditions = { userId }
+      } else if (from !== '' && to !== '') {
+        console.log('Both from and to')
+        findConditions = { $and: [{ userId }, { date: { $gte: from } }, { date: { $lte: to } }] }
+      } else if (to === '') {
+        console.log('Only from')
+        findConditions = { $and: [{ userId }, { date: { $gte: from } }] }
+      } else if (from === '') {
+        console.log('Only to')
+        findConditions = { $and: [{ userId }, { date: { $lte: to } }] }
+      }
+
+      console.log(findConditions)
+      let findUserExercise = await Exercise.find(findConditions)
+      console.log(findUserExercise)
+      if (findUserExercise.length) {
+        const exerciseFields = []
+
+        const sorted = findUserExercise.sort((a, b) => a.date - b.date)
+        const limitedCount = sorted.slice(0, limit)
+
+        let target = limit > 0 ? limitedCount : findUserExercise
+
+        target.filter(exe => {
+          exerciseFields.push({
+            description: exe.description,
+            duration: exe.duration,
+            date: new Date(exe.date).toDateString()
           })
-          if (limit !== '' && !isNaN(limit)) {
-            const sorted = filteredLogs.sort((a, b) => a - b)
-            limitedCount = sorted.slice(0, limit)
-          }
-          return res.json({
-            _id: findUser._id,
-            username: findUser.username,
-            count: findUserExercise.length,
-            logs: limit > 0 ? limitedCount : filteredLogs,
-          })
-        } else {
-          return res.json({
-            _id: findUser._id,
-            username: findUser.username,
-            count: findUserExercise.length,
-            logs: findUserExercise
-          })
-        }
+        })
+
+        return res.json({
+          _id: findUser._id,
+          username: findUser.username,
+          count: findUserExercise.length,
+          log: exerciseFields
+        })
       }
     } else {
       return res.json({
@@ -137,10 +127,11 @@ app.post('/api/users/', async (req, res) => {
       let newUser = new User({
         username
       })
-      await newUser.save()
-      return res.json({
-        username: newUser.username,
-        _id: newUser._id
+      await newUser.save().then(() => {
+        res.json({
+          username: newUser.username,
+          _id: newUser._id
+        })
       })
     } else {
       return res.json({
@@ -162,21 +153,6 @@ app.post('/api/users/:_id/exercises', async (req, res) => {
   const duration = req.body.duration
   const date = req.body.date ? new Date(req.body.date).toDateString() : new Date()
   try {
-    if (description === '') {
-      return res.json({
-        error: 'Description field is required'
-      })
-    }
-    if (isNaN(duration)) {
-      return res.json({
-        error: 'Duration field cannot be empty and must be a valid Number'
-      })
-    }
-    if (date instanceof Date) {
-      return res.json({
-        error: 'Date field cannot be empty and must be a valid Date'
-      })
-    }
     let findUser = await User.findById(userId)
     if (findUser !== null) {
       let newUserExercise = new Exercise({
@@ -185,11 +161,10 @@ app.post('/api/users/:_id/exercises', async (req, res) => {
         duration,
         date,
       })
-      console.log(date)
       await newUserExercise.save().then((data) => {
         res.json({
-          _id: data['userId'],
-          username: data['username'],
+          _id: findUser._id,
+          username: findUser.username,
           description: data['description'],
           duration: data['duration'],
           date: new Date(data['date']).toDateString()
